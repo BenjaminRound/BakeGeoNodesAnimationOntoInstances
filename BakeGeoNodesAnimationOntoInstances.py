@@ -1,28 +1,16 @@
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program. If not, see <https://www.gnu.org/licenses/>.
-
 bl_info = {
     "name": "Bake Geo Nodes Animation Onto Instances",
     "blender": (2, 80, 0),
     "category": "Object",
-    "version": (1, 0),
+    "version": (1, 4),
     "author": "Benjamin Round (with assistance from ChatGPT)",
-    "description": "Bakes animated transforms from Geometry Nodes instances to keyframes.\nAccess addon from Object > Apply.",
+    "description": "Bakes animated transforms from Geometry Nodes instances to keyframes with frame skipping.\nAccess addon from Object > Apply.",
 }
 
 import bpy
 
-def bake_geo_nodes_animation():
+
+def bake_geo_nodes_animation(skip_frames=20):
     # Get the active object (the one with the Geometry Nodes modifier)
     active_obj = bpy.context.active_object
 
@@ -44,14 +32,14 @@ def bake_geo_nodes_animation():
     # List to store the instances from the first frame
     base_instances = []
 
-    # Process each frame
-    for frame in range(frame_start, frame_end + 1):
+    # Process frames with the specified skip interval
+    for frame in range(frame_start, frame_end + 1, skip_frames):
         bpy.context.scene.frame_set(frame)
         print(f"Processing frame {frame}")
 
         # Deselect all objects
         bpy.ops.object.select_all(action='DESELECT')
-        
+
         # Select the active object
         active_obj.select_set(True)
         bpy.context.view_layer.objects.active = active_obj
@@ -78,9 +66,9 @@ def bake_geo_nodes_animation():
             for idx, obj in enumerate(new_objs):
                 if idx < len(base_instances):
                     base_instance = base_instances[idx]
-                    base_instance.location = obj.location
-                    base_instance.rotation_euler = obj.rotation_euler
-                    base_instance.scale = obj.scale
+                    base_instance.location = obj.matrix_world.translation
+                    base_instance.rotation_euler = obj.matrix_world.to_euler()
+                    base_instance.scale = obj.matrix_world.to_scale()
                     base_instance.keyframe_insert(data_path="location", frame=frame)
                     base_instance.keyframe_insert(data_path="rotation_euler", frame=frame)
                     base_instance.keyframe_insert(data_path="scale", frame=frame)
@@ -89,13 +77,46 @@ def bake_geo_nodes_animation():
             for obj in new_objs:
                 bpy.data.objects.remove(obj, do_unlink=True)
 
+    # Handle the last frame separately
+    bpy.context.scene.frame_set(frame_end)
+    print(f"Processing end frame {frame_end}")
+
+    # Deselect all objects
+    bpy.ops.object.select_all(action='DESELECT')
+
+    # Select the active object
+    active_obj.select_set(True)
+    bpy.context.view_layer.objects.active = active_obj
+
+    # Make instances real
+    bpy.ops.object.duplicates_make_real()
+
+    # Get all newly created objects (instances)
+    new_objs = [obj for obj in bpy.context.selected_objects if obj not in initial_objects]
+
+    # Transfer transforms to the base instances and insert keyframes for the last frame
+    for idx, obj in enumerate(new_objs):
+        if idx < len(base_instances):
+            base_instance = base_instances[idx]
+            base_instance.location = obj.matrix_world.translation
+            base_instance.rotation_euler = obj.matrix_world.to_euler()
+            base_instance.scale = obj.matrix_world.to_scale()
+            base_instance.keyframe_insert(data_path="location", frame=frame_end)
+            base_instance.keyframe_insert(data_path="rotation_euler", frame=frame_end)
+            base_instance.keyframe_insert(data_path="scale", frame=frame_end)
+
+    # Delete all newly created objects for the last frame
+    for obj in new_objs:
+        bpy.data.objects.remove(obj, do_unlink=True)
+
     # Remove the Geometry Nodes modifier from the final instances
     for base_instance in base_instances:
         for modifier in base_instance.modifiers:
             if modifier.type == 'NODES':
                 base_instance.modifiers.remove(modifier)
 
-    print("Transforms baked into keyframes, unnecessary objects removed, and modifiers cleaned.")
+    print("Transforms baked into keyframes with frame skipping, and end frame ensured.")
+
 
 class OBJECT_OT_BakeGeoNodesAnimation(bpy.types.Operator):
     """Bake Geometry Nodes Animation"""
@@ -103,20 +124,34 @@ class OBJECT_OT_BakeGeoNodesAnimation(bpy.types.Operator):
     bl_label = "Bake Geo Nodes Animation"
     bl_options = {'REGISTER', 'UNDO'}
 
+    skip_frames: bpy.props.IntProperty(
+        name="Skip Frames",
+        description="Number of frames to skip between keyframes",
+        default=20,
+        min=1,
+    )
+
     def execute(self, context):
-        bake_geo_nodes_animation()
+        bake_geo_nodes_animation(skip_frames=self.skip_frames)
         return {'FINISHED'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
 
 def menu_func(self, context):
     self.layout.operator(OBJECT_OT_BakeGeoNodesAnimation.bl_idname)
+
 
 def register():
     bpy.utils.register_class(OBJECT_OT_BakeGeoNodesAnimation)
     bpy.types.VIEW3D_MT_object_apply.append(menu_func)
 
+
 def unregister():
     bpy.utils.unregister_class(OBJECT_OT_BakeGeoNodesAnimation)
     bpy.types.VIEW3D_MT_object_apply.remove(menu_func)
+
 
 if __name__ == "__main__":
     register()
